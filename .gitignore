@@ -1,0 +1,37 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+*.db
+*.sqlite3
+
+# Storage — large binary/media files
+storage/
+backend/storage/
+**/storage/videos/
+**/storage/frames/
+**/storage/evidence/
+**/storage/evidence_*/
+
+# ML model weights (large binary files)
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# Demo videos
+demo/
+
+# Node / frontend build
+node_modules/
+dist/
+.next/
+
+# Test artifacts
+test-results/
+playwright-report/
+frontend/e2e/screenshots/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,140 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: urbaneyes
+      POSTGRES_USER: urbaneyes
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres_init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U urbaneyes -d urbaneyes"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [urbaneyes-net]
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [urbaneyes-net]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:-urbaneyes}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-CHANGE_ME_MINIO_32CHARS_MIN!}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [urbaneyes-net]
+
+  # One-shot bucket bootstrap for the demo (idempotent).
+  mc:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_USER:-urbaneyes}" "$${MINIO_PASSWORD:-CHANGE_ME_MINIO_32CHARS_MIN!}" \
+        && mc mb --ignore-existing local/urbaneyes
+    environment:
+      MINIO_USER: ${MINIO_USER:-urbaneyes}
+      MINIO_PASSWORD: ${MINIO_PASSWORD:-CHANGE_ME_MINIO_32CHARS_MIN!}
+    networks: [urbaneyes-net]
+
+  api:
+    build: ../backend
+    env_file: ../backend/.env
+    environment:
+      APP_ENV: prod
+      SEED_DEMO: "true"
+      DATABASE_URL: postgresql+psycopg://urbaneyes:${DB_PASSWORD:-CHANGE_ME}@db:5432/urbaneyes
+      REDIS_URL: redis://redis:6379/0
+      TASK_EAGER: "false"
+      STORAGE_PROVIDER: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: urbaneyes
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${MINIO_USER:-urbaneyes}
+      S3_SECRET_KEY: ${MINIO_PASSWORD:-CHANGE_ME_MINIO_32CHARS_MIN!}
+      S3_USE_SSL: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mc:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)\""]
+      interval: 10s
+      timeout: 6s
+      retries: 8
+      start_period: 25s
+    networks: [urbaneyes-net]
+
+  worker:
+    build: ../backend
+    env_file: ../backend/.env
+    environment:
+      APP_ENV: prod
+      SEED_DEMO: "false"
+      DATABASE_URL: postgresql+psycopg://urbaneyes:${DB_PASSWORD:-CHANGE_ME}@db:5432/urbaneyes
+      REDIS_URL: redis://redis:6379/0
+      TASK_EAGER: "false"
+      STORAGE_PROVIDER: s3
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: urbaneyes
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${MINIO_USER:-urbaneyes}
+      S3_SECRET_KEY: ${MINIO_PASSWORD:-CHANGE_ME_MINIO_32CHARS_MIN!}
+      S3_USE_SSL: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: celery --app app.workers.celery_app.celery_app worker --loglevel=info --queues=urbaneyes --concurrency=2
+    networks: [urbaneyes-net]
+
+  web:
+    build: ../frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [urbaneyes-net]
+
+volumes:
+  pgdata:
+  minio-data:
+
+networks:
+  urbaneyes-net:

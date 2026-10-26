@@ -1,0 +1,10 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+# B008 ignored: FastAPI Depends(...) in parameter defaults is the framework's DI idiom.
+# DTZ003 ignored: naive UTC datetimes are intentional — SQLite returns naive datetimes
+# while Postgres returns aware ones, and the app normalizes on comparison (see auth._naive).
+select = ["F", "I", "BLE", "S", "RUF", "RET", "FURB", "PLR0124", "PLR1711"]
+ignore = ["S101"]
